@@ -3,6 +3,7 @@ import { prisma } from '../index';
 import { AuthRequest, requireOwnerOrAdmin, requireOwner } from '../middleware/auth';
 import { hashPassword, generateApiKey } from '../utils/encryption';
 import { cache, cacheKeys } from '../utils/cache';
+import { organizationService } from '../services/organizationService';
 import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
@@ -14,28 +15,7 @@ router.get('/current', async (req: AuthRequest, res: Response) => {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    // Try cache first
-    const cacheKey = cacheKeys.organization(req.user.organizationId);
-    let organization = cache.get(cacheKey);
-
-    if (!organization) {
-      organization = await prisma.organization.findUnique({
-        where: { id: req.user.organizationId },
-        include: {
-          _count: {
-            select: {
-              users: true,
-              dashboards: true,
-              analyticsEvents: true
-            }
-          }
-        }
-      });
-
-      if (organization) {
-        cache.set(cacheKey, organization, 300);
-      }
-    }
+    const organization = await organizationService.getCurrentOrganization(req.user.organizationId);
 
     if (!organization) {
       return res.status(404).json({ error: 'Organization not found' });
