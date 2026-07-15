@@ -47,7 +47,18 @@ router.get('/unread-count', async (req: AuthRequest, res: Response) => {
 router.put('/:notificationId/read', async (req: AuthRequest, res: Response) => {
   try {
     const { notificationId } = req.params;
-    // Can mark other users' notifications as read!
+
+    const existing = await prisma.notification.findFirst({
+      where: {
+        id: notificationId,
+        userId: req.user!.id
+      }
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
     const notification = await prisma.notification.update({
       where: { id: notificationId },
       data: { isRead: true }
@@ -82,9 +93,16 @@ router.put('/mark-all-read', async (req: AuthRequest, res: Response) => {
 router.delete('/:notificationId', async (req: AuthRequest, res: Response) => {
   try {
     const { notificationId } = req.params;
-    await prisma.notification.delete({
-      where: { id: notificationId }
+    const { count } = await prisma.notification.deleteMany({
+      where: {
+        id: notificationId,
+        userId: req.user!.id
+      }
     });
+
+    if (count === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
 
     res.json({ message: 'Notification deleted' });
   } catch (error) {

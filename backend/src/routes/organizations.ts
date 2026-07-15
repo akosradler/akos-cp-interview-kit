@@ -192,8 +192,11 @@ router.put('/members/:memberId', requireOwnerOrAdmin, async (req: AuthRequest, r
   try {
     const { memberId } = req.params;
     const { role, isActive } = req.body;
-    const member = await prisma.user.findUnique({
-      where: { id: memberId }
+    const member = await prisma.user.findFirst({
+      where: {
+        id: memberId,
+        organizationId: req.user!.organizationId
+      }
     });
 
     if (!member) {
@@ -261,14 +264,16 @@ router.delete('/members/:memberId', requireOwnerOrAdmin, async (req: AuthRequest
   try {
     const { memberId } = req.params;
 
-    const member = await prisma.user.findUnique({
-      where: { id: memberId }
+    const member = await prisma.user.findFirst({
+      where: {
+        id: memberId,
+        organizationId: req.user!.organizationId
+      }
     });
 
     if (!member) {
       return res.status(404).json({ error: 'Member not found' });
     }
-    // Can delete users from other organizations
 
     // Can't delete yourself
     if (memberId === req.user!.id) {

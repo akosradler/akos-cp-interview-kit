@@ -5,10 +5,44 @@ import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
 
+async function resourceBelongsToOrg(
+  resourceType: string,
+  resourceId: string,
+  organizationId: string
+): Promise<boolean> {
+  if (resourceType === 'dashboard') {
+    const dashboard = await prisma.dashboard.findFirst({
+      where: { id: resourceId, organizationId },
+      select: { id: true },
+    });
+    return !!dashboard;
+  }
+
+  if (resourceType === 'widget') {
+    const widget = await prisma.widget.findFirst({
+      where: { id: resourceId, organizationId },
+      select: { id: true },
+    });
+    return !!widget;
+  }
+
+  return false;
+}
+
 // Get comments for a resource
 router.get('/:resourceType/:resourceId', async (req: AuthRequest, res: Response) => {
   try {
     const { resourceType, resourceId } = req.params;
+
+    const hasAccess = await resourceBelongsToOrg(
+      resourceType,
+      resourceId,
+      req.user!.organizationId
+    );
+
+    if (!hasAccess) {
+      return res.status(404).json({ error: 'Resource not found' });
+    }
 
     const comments = await prisma.comment.findMany({
       where: {
@@ -36,6 +70,16 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     const { content, resourceType, resourceId, parentId } = req.body;
     if (!content || !resourceType || !resourceId) {
       return res.status(400).json({ error: 'Content, resourceType, and resourceId required' });
+    }
+
+    const hasAccess = await resourceBelongsToOrg(
+      resourceType,
+      resourceId,
+      req.user!.organizationId
+    );
+
+    if (!hasAccess) {
+      return res.status(404).json({ error: 'Resource not found' });
     }
 
     const comment = await prisma.comment.create({

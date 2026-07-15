@@ -270,8 +270,11 @@ router.get('/invoices', async (req: AuthRequest, res: Response) => {
 router.get('/invoices/:invoiceId', async (req: AuthRequest, res: Response) => {
   try {
     const { invoiceId } = req.params;
-    const invoice = await prisma.invoice.findUnique({
-      where: { id: invoiceId }
+    const invoice = await prisma.invoice.findFirst({
+      where: {
+        id: invoiceId,
+        organizationId: req.user!.organizationId
+      }
     });
 
     if (!invoice) {

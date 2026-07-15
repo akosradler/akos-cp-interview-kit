@@ -251,6 +251,15 @@ router.put('/:dashboardId/widgets/:widgetId', async (req: AuthRequest, res: Resp
     if (!dashboard) {
       return res.status(404).json({ error: 'Dashboard not found' });
     }
+
+    const existingWidget = await prisma.widget.findFirst({
+      where: { id: widgetId, dashboardId }
+    });
+
+    if (!existingWidget) {
+      return res.status(404).json({ error: 'Widget not found' });
+    }
+
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (type !== undefined) updateData.type = type;
@@ -289,9 +298,13 @@ router.delete('/:dashboardId/widgets/:widgetId', async (req: AuthRequest, res: R
       return res.status(404).json({ error: 'Dashboard not found' });
     }
 
-    await prisma.widget.delete({
-      where: { id: widgetId }
+    const { count } = await prisma.widget.deleteMany({
+      where: { id: widgetId, dashboardId }
     });
+
+    if (count === 0) {
+      return res.status(404).json({ error: 'Widget not found' });
+    }
 
     cache.delete(cacheKeys.dashboardWidgets(dashboardId));
 
@@ -319,8 +332,8 @@ router.get('/:dashboardId/widgets/:widgetId/data', async (req: AuthRequest, res:
       return res.status(404).json({ error: 'Dashboard not found' });
     }
 
-    const widget = await prisma.widget.findUnique({
-      where: { id: widgetId }
+    const widget = await prisma.widget.findFirst({
+      where: { id: widgetId, dashboardId }
     });
 
     if (!widget) {

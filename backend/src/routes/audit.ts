@@ -255,7 +255,8 @@ router.get('/user/:userId', async (req: AuthRequest, res: Response) => {
     const { userId } = req.params;
     const logs = await prisma.auditLog.findMany({
       where: {
-        userId
+        userId,
+        organizationId: req.user!.organizationId
       },
       orderBy: { createdAt: 'desc' },
       take: 100
