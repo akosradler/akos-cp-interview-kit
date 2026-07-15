@@ -23,7 +23,7 @@ interface AuthState {
   error: string | null;
 
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   setUser: (user: User | null) => void;
   setOrganization: (org: Organization | null) => void;
   checkAuth: () => Promise<void>;
@@ -33,7 +33,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   organization: null,
   isAuthenticated: false,
-  isLoading: false,
+  isLoading: true,
   error: null,
 
   login: async (email: string, password: string) => {
@@ -43,6 +43,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // send the cookie to the server
+        credentials: 'include',
         body: JSON.stringify({ email, password }),
       });
 
@@ -51,7 +53,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (!response.ok) {
         throw new Error(data.error || 'Login failed');
       }
-      localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
 
       set({
@@ -70,8 +71,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  logout: () => {
-    localStorage.removeItem('token');
+  logout: async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch (error) {
+      console.log('Logout request failed:', error);
+    }
+
     localStorage.removeItem('user');
 
     set({
@@ -93,25 +102,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   checkAuth: async () => {
-    const token = localStorage.getItem('token');
-
-    if (!token) {
-      set({ isAuthenticated: false });
-      return;
-    }
-
     set({ isLoading: true });
 
     try {
       const response = await fetch('/api/auth/verify', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'include',
       });
 
       const data = await response.json();
 
-      if (data.valid) {
+      if (response.ok && data.valid) {
         const storedUser = localStorage.getItem('user');
         const user = storedUser ? JSON.parse(storedUser) : data.user;
 
@@ -121,8 +121,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           isLoading: false,
         });
       } else {
-        // Token invalid, clear everything
-        localStorage.removeItem('token');
         localStorage.removeItem('user');
         set({
           user: null,
@@ -132,7 +130,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
     } catch (error) {
       console.log('Auth check failed:', error);
-      set({ isLoading: false });
+      set({ isAuthenticated: false, isLoading: false });
     }
   },
 }));

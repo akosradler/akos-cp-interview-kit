@@ -13,51 +13,72 @@ export interface AuthRequest extends Request {
   };
 }
 
+const extractToken = (req: Request): string | undefined => {
+  const cookieToken = (req as any).cookies?.token;
+  if (cookieToken) {
+    return cookieToken;
+  }
+
+  const authHeader = req.headers.authorization;
+  if (authHeader) {
+    return authHeader.split(' ')[1];
+  }
+
+  return undefined;
+};
+
 export const authMiddleware = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader) {
-      return res.status(401).json({ error: 'No authorization header' });
-    }
-
-    const token = authHeader.split(' ')[1];
+    const token = extractToken(req);
 
     if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
 
+    let decoded: any;
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as any;
-
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.userId }
-      });
-
-      if (!user) {
-        return res.status(401).json({ error: 'User not found' });
-      }
-
-      if (!user.isActive) {
-        return res.status(401).json({ error: 'User is deactivated' });
-      }
-
-      req.user = {
-        id: user.id,
-        email: user.email,
-        organizationId: user.organizationId,
-        role: user.role
-      };
-
-      next();
+      decoded = jwt.verify(token, JWT_SECRET);
     } catch (jwtError) {
       console.log('JWT verification failed:', jwtError);
-      next();
+      return res.status(401).json({ error: 'Invalid or expired token' });
     }
+
+    if (!decoded.sid) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const session = await prisma.session.findUnique({
+      where: { id: decoded.sid }
+    });
+
+    if (!session || session.expiresAt < new Date()) {
+      return res.status(401).json({ error: 'Session expired or revoked' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId }
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    if (!user.isActive) {
+      return res.status(401).json({ error: 'User is deactivated' });
+    }
+
+    req.user = {
+      id: user.id,
+      email: user.email,
+      organizationId: user.organizationId,
+      role: user.role
+    };
+
+    next();
   } catch (error) {
     console.error('Auth middleware error:', error);
     return res.status(500).json({ error: 'Authentication error' });
@@ -81,13 +102,21 @@ export const requireRole = (roles: string[]) => {
 export const requireOwnerOrAdmin = requireRole(['owner', 'admin']);
 export const requireOwner = requireRole(['owner']);
 
-export const generateToken = (userId: string, email: string, organizationId: string, role: string) => {
+export const generateToken = (
+  userId: string,
+  email: string,
+  organizationId: string,
+  role: string,
+  sessionId: string
+) => {
   return jwt.sign(
-    { userId, email, organizationId, role },
+    { userId, email, organizationId, role, sid: sessionId },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
 };
+
+export { JWT_SECRET };
 
 export const apiKeyMiddleware = async (
   req: AuthRequest,

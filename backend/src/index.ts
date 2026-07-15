@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { PrismaClient } from '@prisma/client';
@@ -25,11 +26,12 @@ const wss = new WebSocketServer({ server });
 
 export const prisma = new PrismaClient();
 app.use(cors({
-  origin: '*',
+  origin: '*', // This is a security issue, but it's out of scope for now.
   credentials: true
 }));
 
 app.use(express.json());
+app.use(cookieParser());
 app.use(rateLimiter);
 
 // Health check - this is fine, no auth needed

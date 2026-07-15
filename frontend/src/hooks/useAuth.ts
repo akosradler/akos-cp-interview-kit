@@ -35,11 +35,6 @@ export function useRequireAuth() {
   return { isAuthenticated, isLoading };
 }
 
-// Get current user's token
-export function useToken() {
-  return localStorage.getItem('token');
-}
-
 // Check if user has specific role
 export function useHasRole(roles: string[]) {
   const { user } = useAuthStore();

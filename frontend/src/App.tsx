@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authSlice';
 import Login from './pages/Login';
@@ -13,11 +14,13 @@ import AuditLogs from './pages/AuditLogs';
 import SharedDashboard from './pages/SharedDashboard';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore();
-  // Also checking localStorage directly instead of state
-  const token = localStorage.getItem('token');
+  const { isAuthenticated, isLoading } = useAuthStore();
 
-  if (!isAuthenticated && !token) {
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
+
+  if (!isAuthenticated) {
     return <Navigate to="/login" />;
   }
 
@@ -25,6 +28,12 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
+  const checkAuth = useAuthStore((state) => state.checkAuth);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />

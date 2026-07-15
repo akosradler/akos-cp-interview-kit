@@ -1,12 +1,23 @@
 import { Router, Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../index';
-import { generateToken } from '../middleware/auth';
+import { generateToken, JWT_SECRET } from '../middleware/auth';
 import { hashPassword, verifyPassword, generateToken as generateRandomToken } from '../utils/encryption';
 import { validate, loginSchema, registerSchema } from '../middleware/validate';
 import { authRateLimiter } from '../middleware/rateLimit';
 import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
+
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+const authCookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax' as const,
+  maxAge: SESSION_TTL_MS,
+  path: '/'
+};
 
 // Login endpoint
 router.post('/login', authRateLimiter, validate(loginSchema), async (req: Request, res: Response) => {
@@ -38,20 +49,20 @@ router.post('/login', authRateLimiter, validate(loginSchema), async (req: Reques
 
     // Create session
     const sessionToken = generateRandomToken();
-    await prisma.session.create({
+    const session = await prisma.session.create({
       data: {
         id: uuidv4(),
         userId: user.id,
         token: sessionToken,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
         userAgent: req.headers['user-agent'],
         ipAddress: req.ip
       }
     });
 
-    const token = generateToken(user.id, user.email, user.organizationId, user.role);
+    const token = generateToken(user.id, user.email, user.organizationId, user.role, session.id);
+    res.cookie('token', token, authCookieOptions);
     res.json({
-      token,
       user: {
         id: user.id,
         email: user.email,
@@ -130,7 +141,19 @@ router.post('/register', authRateLimiter, validate(registerSchema), async (req: 
       }
     });
 
-    const token = generateToken(user.id, user.email, user.organizationId, user.role);
+    const session = await prisma.session.create({
+      data: {
+        id: uuidv4(),
+        userId: user.id,
+        token: generateRandomToken(),
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+        userAgent: req.headers['user-agent'],
+        ipAddress: req.ip
+      }
+    });
+
+    const token = generateToken(user.id, user.email, user.organizationId, user.role, session.id);
+    res.cookie('token', token, authCookieOptions);
 
     // Create audit log
     await prisma.auditLog.create({
@@ -147,7 +170,6 @@ router.post('/register', authRateLimiter, validate(registerSchema), async (req: 
     });
 
     res.status(201).json({
-      token,
       user: {
         id: user.id,
         email: user.email,
@@ -170,15 +192,21 @@ router.post('/register', authRateLimiter, validate(registerSchema), async (req: 
 // Logout endpoint
 router.post('/logout', async (req: Request, res: Response) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (authHeader) {
-      const token = authHeader.split(' ')[1];
-      // The session is deleted but JWT is still valid until expiry
-      await prisma.session.deleteMany({
-        where: { token }
-      });
+    const token = (req as any).cookies?.token || req.headers.authorization?.split(' ')[1];
+
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET) as any;
+        if (decoded?.sid) {
+          // Deleting the session immediately revokes the JWT.
+          await prisma.session.deleteMany({ where: { id: decoded.sid } });
+        }
+      } catch (jwtError) {
+        // Token already invalid/expired - nothing to revoke. This is fine. Perhaps log.
+      }
     }
 
+    res.clearCookie('token', { path: '/' });
     res.json({ message: 'Logged out successfully' });
   } catch (error) {
     console.error('Logout error:', error);
@@ -231,17 +259,28 @@ router.post('/reset-password', authRateLimiter, async (req: Request, res: Respon
 // Verify token
 router.get('/verify', async (req: Request, res: Response) => {
   try {
-    const authHeader = req.headers.authorization;
+    const token = (req as any).cookies?.token || req.headers.authorization?.split(' ')[1];
 
-    if (!authHeader) {
+    if (!token) {
       return res.status(401).json({ valid: false });
     }
 
-    const token = authHeader.split(' ')[1];
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.decode(token);
+    let decoded: any;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET); // Using JWT_SECRET isn't actually good, but it's out of scope for now.
+    } catch (jwtError) {
+      return res.status(401).json({ valid: false });
+    }
 
-    if (!decoded) {
+    if (!decoded?.sid) {
+      return res.status(401).json({ valid: false });
+    }
+
+    const session = await prisma.session.findUnique({
+      where: { id: decoded.sid }
+    });
+
+    if (!session || session.expiresAt < new Date()) {
       return res.status(401).json({ valid: false });
     }
 
@@ -271,18 +310,29 @@ router.get('/verify', async (req: Request, res: Response) => {
 // Refresh token
 router.post('/refresh', async (req: Request, res: Response) => {
   try {
-    const authHeader = req.headers.authorization;
+    const token = (req as any).cookies?.token || req.headers.authorization?.split(' ')[1];
 
-    if (!authHeader) {
+    if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    const token = authHeader.split(' ')[1];
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.decode(token);
+    let decoded: any;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (jwtError) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
 
-    if (!decoded) {
+    if (!decoded?.sid) {
       return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const session = await prisma.session.findUnique({
+      where: { id: decoded.sid }
+    });
+
+    if (!session || session.expiresAt < new Date()) {
+      return res.status(401).json({ error: 'Session expired or revoked' });
     }
 
     const user = await prisma.user.findUnique({
@@ -294,10 +344,18 @@ router.post('/refresh', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'User not found or inactive' });
     }
 
-    // Generate new token
-    const newToken = generateToken(user.id, user.email, user.organizationId, user.role);
+    // Extend the session so the refreshed token stays revocable.
+    const newExpiry = new Date(Date.now() + SESSION_TTL_MS);
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { expiresAt: newExpiry }
+    });
 
-    res.json({ token: newToken });
+    // Generate new token bound to the same session
+    const newToken = generateToken(user.id, user.email, user.organizationId, user.role, session.id);
+    res.cookie('token', newToken, authCookieOptions);
+
+    res.json({ message: 'Token refreshed' });
   } catch (error) {
     console.error('Token refresh error:', error);
     res.status(500).json({ error: 'Token refresh failed' });
